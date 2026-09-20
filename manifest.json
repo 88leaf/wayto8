@@ -1,0 +1,16 @@
+{
+  "name": "BreadPOS Dashboard",
+  "short_name": "BreadPOS",
+  "description": "Sistem Kasir Pintar untuk Sandwich",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#171a17",
+  "theme_color": "#171a17",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
