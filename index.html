@@ -38,6 +38,8 @@ button,input,select{font:inherit}button{cursor:pointer;border:0}.app{display:fle
 <div class="mobile-nav" id="mobileNav"></div>
 
 <script>
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx1CW5UzuetXyofCAQ3qlB2jnJ_Pa_4jwztISiJk6RQXU359GC2V-h9GREFZJ2kFTUS/exec";
+
 const money=n=>new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',maximumFractionDigits:0}).format(n);
 const defaultIngredients=[
 ['Bread','pcs',3000,80,20,'Bakery'],['Chicken','gram',55,5000,2000,'Supplier A'],['Beef','gram',70,4000,1500,'Supplier B'],
@@ -50,13 +52,60 @@ const defaultProducts=[
 {id:2,name:'Beef BBQ',price:18000,emoji:'🥪',recipe:[['Bread',1],['Beef',80],['Lettuce',20],['Tomato',20],['Onion',10],['Mayonnaise',15],['BBQ Sauce',10]]},
 {id:3,name:'Egg Cheese',price:12000,emoji:'🥪',recipe:[['Bread',1],['Egg',1],['Cheese',1],['Lettuce',20],['Tomato',20],['Onion',10],['Mayonnaise',15],['Mustard',10]]}
 ];
+
 let ingredients=JSON.parse(localStorage.getItem('breadpos_ing')||'null')||defaultIngredients.map(x=>({name:x[0],unit:x[1],cost:x[2],stock:x[3],min:x[4],supplier:x[5]}));
 let products=JSON.parse(localStorage.getItem('breadpos_products')||'null')||JSON.parse(JSON.stringify(defaultProducts));
 let sales=JSON.parse(localStorage.getItem('breadpos_sales')||'[]');
 let settings=JSON.parse(localStorage.getItem('breadpos_settings')||'null')||{business:'WAY TO 8',tagline:'Grab. Bite. Repeat.',currency:'IDR',address:'',phone:''};
 let cart=[]; let active='dashboard';
 
-function save(){localStorage.setItem('breadpos_ing',JSON.stringify(ingredients));localStorage.setItem('breadpos_products',JSON.stringify(products));localStorage.setItem('breadpos_sales',JSON.stringify(sales));localStorage.setItem('breadpos_settings',JSON.stringify(settings))}
+// Fungsi Simpan ke LocalStorage & Sync ke Google Sheets
+function save(){
+  localStorage.setItem('breadpos_ing',JSON.stringify(ingredients));
+  localStorage.setItem('breadpos_products',JSON.stringify(products));
+  localStorage.setItem('breadpos_sales',JSON.stringify(sales));
+  localStorage.setItem('breadpos_settings',JSON.stringify(settings));
+
+  // Kirim data ke Google Sheets di latar belakang
+  if(SCRIPT_URL){
+    fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        type: 'saveAll',
+        products: products.map(p => ({...p, recipe: JSON.stringify(p.recipe)})), // Parse resep jadi string untuk sheets
+        ingredients: ingredients,
+        sales: sales
+      })
+    }).catch(err => console.log('Gagal sync ke Sheets:', err));
+  }
+}
+
+// Ambil data terbaru dari Google Sheets saat aplikasi pertama kali dimuat
+function loadFromCloud(){
+  if(!SCRIPT_URL) return;
+  fetch(SCRIPT_URL + '?action=getData')
+    .then(res => res.json())
+    .then(data => {
+      if(data && data.products && data.products.length > 0){
+        products = data.products.map(p => ({
+          ...p,
+          recipe: typeof p.recipe === 'string' ? JSON.parse(p.recipe) : p.recipe
+        }));
+      }
+      if(data && data.ingredients && data.ingredients.length > 0){
+        ingredients = data.ingredients;
+      }
+      if(data && data.sales && data.sales.length > 0){
+        sales = data.sales;
+      }
+      save(); // Simpan ke localstorage lokal
+      renderAll();
+    })
+    .catch(err => console.log('Menggunakan data offline (Local):', err));
+}
+
 function ing(name){return ingredients.find(x=>x.name===name)}
 function hpp(p){return p.recipe.reduce((s,[n,q])=>s+(ing(n)?.cost||0)*q,0)}
 function fmtPct(v){return (v||0).toFixed(1).replace('.',',')+'%'}
@@ -83,13 +132,13 @@ function renderPOS(){
 }
 function addCart(id){let p=products.find(x=>x.id===id),x=cart.find(x=>x.p.id===id);x?x.qty++:cart.push({p,qty:1});renderPOS()}
 function changeCart(i,d){cart[i].qty+=d;if(cart[i].qty<=0)cart.splice(i,1);renderPOS()}
-function checkout(){if(!cart.length)return alert('Keranjang masih kosong.');let date=new Date().toISOString().slice(0,10),total=cart.reduce((s,x)=>s+x.p.price*x.qty,0),qty=cart.reduce((s,x)=>s+x.qty,0),profit=cart.reduce((s,x)=>s+(x.p.price-hpp(x.p))*x.qty,0);cart.forEach(x=>x.p.recipe.forEach(([n,q])=>{let a=ing(n);if(a)a.stock-=q*x.qty}));sales.unshift({id:'TRX-'+Date.now().toString().slice(-6),date,time:new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),product:cart.map(x=>x.p.name).join(', '),qty,total,profit,payment:document.getElementById('pay').value});save();cart=[];alert('Transaksi berhasil disimpan!');showPage('sales')}
+function checkout(){if(!cart.length)return alert('Keranjang masih kosong.');let date=new Date().toISOString().slice(0,10),total=cart.reduce((s,x)=>s+x.p.price*x.qty,0),qty=cart.reduce((s,x)=>s+x.qty,0),profit=cart.reduce((s,x)=>s+(x.p.price-hpp(x.p))*x.qty,0);cart.forEach(x=>x.p.recipe.forEach(([n,q])=>{let a=ing(n);if(a)a.stock-=q*x.qty}));sales.unshift({id:'TRX-'+Date.now().toString().slice(-6),date,time:new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),product:cart.map(x=>x.p.name).join(', '),qty,total,profit,payment:document.getElementById('pay').value});save();cart=[];alert('Transaksi berhasil disimpan & disinkronkan!');showPage('sales')}
 function renderMenu(){document.getElementById('menu').innerHTML=`<div class="grid three">${products.map(p=>{let c=hpp(p),pr=p.price-c;return `<div class="card"><div style="font-size:50px">${p.emoji}</div><h2>${p.name}</h2><p class="muted">Sandwich 6 inch dengan bahan segar.</p><div class="row"><span>Harga jual</span><b>${money(p.price)}</b></div><div class="row"><span>HPP</span><span>${money(c)}</span></div><div class="row"><span>Profit</span><span class="badge">${money(pr)}</span></div><div style="margin-top:10px"><span class="badge">${fmtPct(pr/p.price*100)} margin</span></div><button class="btn" style="width:100%;margin-top:14px" onclick="showRecipe(${p.id})">Lihat / Atur Resep</button></div>`}).join('')}</div>`}
 function showRecipe(id){showPage('hpp');setTimeout(()=>document.getElementById('hppProduct').value=id,0)}
 function renderStock(){document.getElementById('stock').innerHTML=`<div class="card"><div class="row"><h2>Daftar bahan baku</h2><button class="btn primary" onclick="addIngredient()">＋ Tambah Bahan</button></div><table><tr><th>Bahan</th><th>Satuan</th><th>Harga/unit</th><th>Stok</th><th>Minimum</th><th>Supplier</th><th>Status</th></tr>${ingredients.map((x,i)=>`<tr><td><b>${x.name}</b></td><td>${x.unit}</td><td>${money(x.cost)}</td><td><input value="${x.stock}" onchange="updateStock(${i},this.value)" style="width:80px;padding:6px;border:1px solid var(--line);border-radius:7px"></td><td>${x.min}</td><td>${x.supplier}</td><td>${x.stock<=0?'<span class="badge danger">Habis</span>':x.stock<=x.min?'<span class="badge warn">Stok menipis</span>':'<span class="badge">Aman</span>'}</td></tr>`).join('')}</table></div>`}
 function updateStock(i,v){ingredients[i].stock=Number(v);save();renderStock();renderDashboard()}
 function addIngredient(){let name=prompt('Nama bahan:');if(!name)return;let unit=prompt('Satuan (gram/ml/pcs):','gram'),cost=Number(prompt('Harga per satuan:','100')),stock=Number(prompt('Stok awal:','1000')),min=Number(prompt('Minimum stok:','200'));ingredients.push({name,unit,cost,stock,min,supplier:'Supplier baru'});save();renderAll()}
-function renderHPP(){let p=products[0];document.getElementById('hpp').innerHTML=`<div class="card"><div class="row"><div><h2>Recipe Builder & HPP</h2><p class="muted">Harga bahan otomatis memengaruhi HPP.</p></div><select id="hppProduct" onchange="renderHPP()" style="padding:10px;border:1px solid var(--line);border-radius:9px">${products.map(x=>`<option value="${x.id}" ${x.id===p.id?'selected':''}>${x.name}</option>`).join('')}</select></div><div id="hppDetail"></div></div>`;let sel=document.getElementById('hppProduct');let chosen=products.find(x=>x.id==sel.value)||p;let c=hpp(chosen),profit=chosen.price-c;document.getElementById('hppDetail').innerHTML=`<div style="margin-top:18px">${chosen.recipe.map(([n,q])=>`<div class="recipe-row"><b>${n}</b><span>${q}${ing(n)?.unit||''}</span><span>${money((ing(n)?.cost\vert{}\vert{}0))}/unit</span><span>${money((ing(n)?.cost||0)*q)}</span><span>✓</span></div>`).join('')}</div><div class="grid three" style="margin-top:20px"><div class="card"><small class="muted">Total HPP</small><div class="num">${money(c)}</div></div><div class="card"><small class="muted">Harga Jual</small><div class="num">${money(chosen.price)}</div></div><div class="card"><small class="muted">Gross Profit</small><div class="num">${money(profit)}</div><div class="up">Margin ${fmtPct(profit/chosen.price*100)}</div></div></div>`}
+function renderHPP(){let p=products[0];document.getElementById('hpp').innerHTML=`<div class="card"><div class="row"><div><h2>Recipe Builder & HPP</h2><p class="muted">Harga bahan otomatis memengaruhi HPP.</p></div><select id="hppProduct" onchange="renderHPP()" style="padding:10px;border:1px solid var(--line);border-radius:9px">${products.map(x=>`<option value="${x.id}" ${x.id===p.id?'selected':''}>${x.name}</option>`).join('')}</i></select></div><div id="hppDetail"></div></div>`;let sel=document.getElementById('hppProduct');let chosen=products.find(x=>x.id==sel.value)||p;let c=hpp(chosen),profit=chosen.price-c;document.getElementById('hppDetail').innerHTML=`<div style="margin-top:18px">${chosen.recipe.map(([n,q])=>`<div class="recipe-row"><b>${n}</b><span>${q}${ing(n)?.unit||''}</span><span>${money((ing(n)?.cost\vert{}\vert{}0))}/unit</span><span>${money((ing(n)?.cost||0)*q)}</span><span>✓</span></div>`).join('')}</div><div class="grid three" style="margin-top:20px"><div class="card"><small class="muted">Total HPP</small><div class="num">${money(c)}</div></div><div class="card"><small class="muted">Harga Jual</small><div class="num">${money(chosen.price)}</div></div><div class="card"><small class="muted">Gross Profit</small><div class="num">${money(profit)}</div><div class="up">Margin ${fmtPct(profit/chosen.price*100)}</div></div></div>`}
 function renderSales(){document.getElementById('sales').innerHTML=`<div class="card"><div class="row"><h2>Riwayat transaksi</h2><span class="muted">${sales.length} transaksi</span></div>${sales.length?`<table><tr><th>ID</th><th>Tanggal</th><th>Produk</th><th>Qty</th><th>Total</th><th>Pembayaran</th><th>Profit</th></tr>${sales.map(x=>`<tr><td><b>${x.id}</b></td><td>${x.date}<br><small>${x.time}</small></td><td>${x.product}</td><td>${x.qty}</td><td>${money(x.total)}</td><td>${x.payment}</td><td>${money(x.profit)}</td></tr>`).join('')}</table>`:'<div class="empty">Belum ada transaksi. Mulai dari Kasir.</div>'}</div>`}
 function renderReports(){let omzet=sales.reduce((s,x)=>s+x.total,0),profit=sales.reduce((s,x)=>s+x.profit,0),qty=sales.reduce((s,x)=>s+x.qty,0);document.getElementById('reports').innerHTML=`<div class="grid stats">${stat('Total omzet',money(omzet),'Semua transaksi')}${stat('Total produk',qty+' pcs','Terjual')}${stat('Total HPP',money(omzet-profit),'Estimasi')}${stat('Gross profit',money(profit),'Margin '+fmtPct(omzet?profit/omzet*100:0))}</div><div class="card section"><h2>Performa produk</h2><table><tr><th>Produk</th><th>Harga</th><th>HPP</th><th>Profit/unit</th><th>Margin</th></tr>${products.map(p=>{let c=hpp(p),pr=p.price-c;return `<tr><td>${p.name}</td><td>${money(p.price)}</td><td>${money(c)}</td><td>${money(pr)}</td><td>${fmtPct(pr/p.price*100)}</td></tr>`}).join('')}</table></div>`}
 function renderAdmin(){
@@ -128,7 +177,7 @@ function renderAdmin(){
     <div class="field"><label>Alamat</label><input value="${esc(settings.address)}" onchange="settings.address=this.value;save()"></div>
     <div class="field"><label>Nomor telepon</label><input value="${esc(settings.phone)}" onchange="settings.phone=this.value;save()"></div>
    </div></div>
-   <div class="card section"><h2>Data</h2><p class="muted">Simpan otomatis di browser ini (localStorage).</p><button class="btn" onclick="exportBackup()">Export Backup JSON</button> <button class="btn" onclick="importBackup()">Import Backup JSON</button> <button class="btn" onclick="if(confirm('Reset semua data demo?')){localStorage.clear();location.reload()}">Reset Data Demo</button></div>
+   <div class="card section"><h2>Data Google Sheets</h2><p class="muted">Sinkronisasi otomatis dengan Google Sheets aktif.</p><button class="btn primary" onclick="loadFromCloud();alert('Data berhasil disinkronkan dari Google Sheets!')">Sinkronkan Sekarang</button></div>
   </div>
  </div>`
 }
@@ -143,18 +192,17 @@ function removeRecipe(i,j){products[i].recipe.splice(j,1);save();renderAll()}
 function editIngredient(i,k,v){ingredients[i][k]=['cost','stock','min'].includes(k)?Number(v)||0:v;save();renderAll()}
 function addIngredientAdmin(){ingredients.push({name:'Bahan Baru',unit:'gram',cost:0,stock:0,min:0,supplier:'Supplier baru'});save();renderAll()}
 function deleteIngredient(i){let name=ingredients[i].name;if(products.some(p=>p.recipe.some(r=>r[0]===name)))return alert('Bahan masih dipakai di resep. Hapus dari resep terlebih dahulu.');if(confirm('Hapus bahan ini?')){ingredients.splice(i,1);save();renderAll()}}
-function exportBackup(){let data={ingredients,products,sales,settings,version:2};let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='breadpos-backup.json';a.click()}
-function importBackup(){let input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.onchange=()=>{let f=input.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let d=JSON.parse(r.result);if(!d.products||!d.ingredients)throw Error('Format backup tidak valid');products=d.products;ingredients=d.ingredients;sales=d.sales||[];settings=d.settings||settings;save();renderAll();alert('Backup berhasil diimport')}catch(e){alert('Backup gagal diimport: '+e.message)}};r.readAsText(f)};input.click()}
 
 function exportCSV(){let rows=[['ID','Tanggal','Produk','Qty','Total','Pembayaran','Profit'],...sales.map(x=>[x.id,x.date,x.product,x.qty,x.total,x.payment,x.profit])];let csv=rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='breadpos-penjualan.csv';a.click()}
-renderNav();renderAll();
 
-// Daftarkan Service Worker agar siap dijalankan secara multidevice & offline
+// Jalankan saat pertama kali halaman dimuat
+renderNav();
+loadFromCloud(); // Ambil data terbaru dari cloud Google Sheets
+
+// Daftarkan Service Worker
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then(reg => {
-      console.log('ServiceWorker registered: ', reg);
-    }).catch(err => {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
       console.log('ServiceWorker registration failed: ', err);
     });
   });
